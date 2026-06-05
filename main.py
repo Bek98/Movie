@@ -1,4 +1,5 @@
 import os
+from pymongo import MongoClient
 import asyncio
 import logging
 import sqlite3
@@ -17,6 +18,9 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = str(getenv("BOT_TOKEN"))
 ADMIN_ID = int(getenv("ID", 0))
+MONGO_URL = os.environ.get("MONGO_URL")
+klient = MongoClient(MONGO_URL)
+db = klient["movie_bot_baza"]
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
