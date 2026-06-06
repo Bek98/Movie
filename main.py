@@ -1,5 +1,3 @@
-import os
-from pymongo import MongoClient
 import asyncio
 import logging
 import sqlite3
@@ -9,7 +7,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, Message, 
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -18,9 +16,6 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = str(getenv("BOT_TOKEN"))
 ADMIN_ID = int(getenv("ID", 0))
-MONGO_URL = os.environ.get("MONGO_URL")
-klient = MongoClient(MONGO_URL)
-db = klient["movie_bot_baza"]
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -30,7 +25,6 @@ class AdminStates(StatesGroup):
     waiting_for_movie_code = State()
     waiting_for_movie_file = State()
     waiting_for_delete_code = State()
-    waiting_for_search_code = State()
     waiting_for_channel_add = State()
     waiting_for_channel_del = State()
 
@@ -110,18 +104,13 @@ def get_admin_keyboard():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑️ Kinoni o'chirish")],
         [KeyboardButton(text="📢 Kanallarni boshqarish"), KeyboardButton(text="📊 Statistika")],
-        [KeyboardButton(text="🏠 Bosh sahifa")]
+        [KeyboardButton(text="🔄 Qaytadan ishga tushirish"), KeyboardButton(text="🏠 Bosh sahifa")]
     ], resize_keyboard=True)
 
 def get_channel_keyboard():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Kanal qo'shish"), KeyboardButton(text="➖ Kanal o'chirish")],
         [KeyboardButton(text="◀️ Ortga")]
-    ], resize_keyboard=True)
-
-def get_user_keyboard():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🔍 Kino izlash")]
     ], resize_keyboard=True)
 
 # ================= SUBSCRIPTION CHECK =================
@@ -138,7 +127,7 @@ async def check_subs(user_id: int) -> List[str]:
             missing.append(ch)
     return missing
 
-# ================= USER HANDLERS =================
+# ================= START HANDLER =================
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
@@ -149,40 +138,24 @@ async def start(message: Message, state: FSMContext):
     if message.from_user.id == ADMIN_ID:
         await message.answer("Admin panelga xush kelibsiz!", reply_markup=get_admin_keyboard())
     else:
-        await message.answer("Botga xush kelibsiz! Kino izlash uchun pastdagi tugmani bosing.", reply_markup=get_user_keyboard())
+        await message.answer("Botga xush kelibsiz!\n\nKino ko'rish uchun shunchaki kino kodini yuboring:", reply_markup=ReplyKeyboardRemove())
 
-@dp.message(F.text == "🔍 Kino izlash")
-async def search_start(message: Message, state: FSMContext):
-    if not message.from_user: return
+# ================= ADMIN RESTART HANDLER =================
+@dp.message(F.text == "🔄 Qaytadan ishga tushirish")
+async def admin_restart(message: Message, state: FSMContext):
+    if not message.from_user or message.from_user.id != ADMIN_ID: return
     
-    # Majburiy obunani tekshirish
-    missing = await check_subs(message.from_user.id)
-    if missing:
-        btns = [[InlineKeyboardButton(text=f"A'zo bo'lish", url=f"https://t.me/{ch.replace('@', '')}")] for ch in missing]
-        await message.answer("❌ Kino izlashdan oldin quyidagi kanallarga a'zo bo'lishingiz shart:", reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
-        return
-
-    await state.set_state(AdminStates.waiting_for_search_code)
-    await message.answer("Kino kodini kiriting:")
-
-@dp.message(AdminStates.waiting_for_search_code)
-async def find_movie(message: Message, state: FSMContext):
-    if not message.text or not message.from_user: return
+    # Ekranga chiqqan "🔄 Qaytadan ishga tushirish" matnini o'chirib tashlaydi
+    try:
+        await message.delete()
+    except Exception:
+        pass # Agar o'chirishda huquq yetishmovchiligi bo'lsa, xato bermaydi
     
-    # Kiritish jarayonida ham yana obunani tekshirish (ehtiyot shart)
-    missing = await check_subs(message.from_user.id)
-    if missing:
-        btns = [[InlineKeyboardButton(text=f"A'zo bo'lish", url=f"https://t.me/{ch.replace('@', '')}")] for ch in missing]
-        await message.answer("❌ Kechirasiz, siz kanallarga a'zo bo'lmadingiz:", reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
-        return
-
-    movie = DatabaseManager.get_movie(message.text)
-    if movie:
-        # protect_content=True orqali kinoni boshqaga yuborib bo'lmaydigan (saqlab bo'lmaydigan) qilib qo'yildi
-        await message.answer_video(movie['file_id'], caption=movie['name'], protect_content=True)
-    else:
-        await message.answer("❌ Kino topilmadi.")
+    # Barcha kutilayotgan holatlarni tozalaydi
     await state.clear()
+    
+    # Botni yangi boshlagandek xabar beradi
+    await message.answer("Bot xotirasi tozalandi va qaytadan ishga tushdi!", reply_markup=get_admin_keyboard())
 
 # ================= ADMIN KANAL BOSHQARUVI =================
 @dp.message(F.text == "📢 Kanallarni boshqarish")
@@ -198,7 +171,7 @@ async def add_channel_start(message: Message, state: FSMContext):
     if not message.from_user or message.from_user.id != ADMIN_ID: return
     
     await state.set_state(AdminStates.waiting_for_channel_add)
-    await message.answer("Kanal nomini kiritng (Masalan: @mening_kanalim):")
+    await message.answer("Kanal nomini kiriting (Masalan: @mening_kanalim):")
 
 @dp.message(AdminStates.waiting_for_channel_add)
 async def process_channel_add(message: Message, state: FSMContext):
@@ -213,7 +186,7 @@ async def del_channel_start(message: Message, state: FSMContext):
     if not message.from_user or message.from_user.id != ADMIN_ID: return
     
     await state.set_state(AdminStates.waiting_for_channel_del)
-    await message.answer("O'chirmoqchi bo'lgan kanal nomini kiritng (Masalan: @mening_kanalim):")
+    await message.answer("O'chirmoqchi bo'lgan kanal nomini kiriting (Masalan: @mening_kanalim):")
 
 @dp.message(AdminStates.waiting_for_channel_del)
 async def process_channel_del(message: Message, state: FSMContext):
@@ -289,7 +262,24 @@ async def home(message: Message, state: FSMContext):
     if message.from_user.id == ADMIN_ID:
         await message.answer("Bosh sahifa", reply_markup=get_admin_keyboard())
     else:
-        await message.answer("Bosh sahifa", reply_markup=get_user_keyboard())
+        await message.answer("Bosh sahifa", reply_markup=ReplyKeyboardRemove())
+
+# ================= KINO IZLASH UCHUN ASOSIY (CATCH-ALL) HANDLER =================
+@dp.message(F.text)
+async def find_movie_direct(message: Message):
+    if not message.text or not message.from_user: return
+    
+    missing = await check_subs(message.from_user.id)
+    if missing:
+        btns = [[InlineKeyboardButton(text=f"A'zo bo'lish", url=f"https://t.me/{ch.replace('@', '')}")] for ch in missing]
+        await message.answer("❌ Kino ko'rishdan oldin quyidagi kanallarga a'zo bo'lishingiz shart:", reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+        return
+
+    movie = DatabaseManager.get_movie(message.text)
+    if movie:
+        await message.answer_video(movie['file_id'], caption=movie['name'], protect_content=True)
+    else:
+        await message.answer("❌ Bunday kodli kino topilmadi. Iltimos, kodni to'g'ri kiriting.")
 
 async def main():
     DatabaseManager.init_db()
